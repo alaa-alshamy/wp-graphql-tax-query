@@ -218,18 +218,33 @@ class TaxQuery {
 			]
 		] );
 
-		$type_registry->register_input_type( 'TaxQuery', [
-			'description' => __( 'Query objects based on taxonomy parameters', 'wp-graphql' ),
-			'fields'      => [
-				'relation' => [
-					'type' => 'RelationEnum',
-				],
-				'taxArray' => [
-					'type' => [
-						'list_of' => 'TaxArray',
-					],
+		$tax_query = [
+			'relation' => [
+				'type' => 'RelationEnum',
+			],
+			'taxArray' => [
+				'type' => [
+					'list_of' => 'TaxArray',
 				],
 			],
+		];
+
+		$type_registry->register_input_type( 'InnerTaxQuery', [
+			'fields' => $tax_query
+		] );
+
+		$type_registry->register_input_type( 'TaxQuery', [
+			'description' => __( 'Query objects based on taxonomy parameters', 'wp-graphql' ),
+			'fields'      => array_merge(
+				$tax_query,
+				[
+					'taxQuery' => [
+						'type' => [
+							'list_of' => 'InnerTaxQuery'
+						],
+					],
+				]
+			),
 		] );
 	}
 
@@ -251,54 +266,39 @@ class TaxQuery {
 		 * This maps the GraphQL taxQuery input to the WP_Query tax_query format
 		 * @since 0.0.5
 		 */
-		$tax_query = null;
 		if ( ! empty( $input_args['taxQuery'] ) ) {
+			$tax_query = null;
 
 			// Get the taxQuery input
-			$tax_query = $input_args['taxQuery'];
+			$input_tax_query = $input_args['taxQuery'];
+
+			$value = $this->prepare_tax_query( $input_tax_query );
+			if ( ! empty( $value ) ) {
+				unset( $value['taxQuery'] );
+				$tax_query[] = $value;
+			}
 
 			// If the taxArray was entered
-			if ( ! empty( $tax_query['taxArray'] ) && is_array( $tax_query['taxArray'] ) ) {
-
-				// If less than 2 taxArray objects were passed through, we don't need the "relation" field
-				// to be passed to WP_Query, so we'll unset it now
-				if ( 2 > count( $tax_query['taxArray'] ) ) {
-					unset( $tax_query['relation'] );
-				}
-
+			if (
+				! empty( $input_tax_query['taxQuery'] )
+				&& is_array( $input_tax_query['taxQuery'] )
+			) {
 				// Loop through the taxArray
-				foreach ( $tax_query['taxArray'] as $tax_array_key => $value ) {
-
-					// If the "field" option was selected to be "term_id" or "term_taxonomy_id" we need to convert
-					// the values of the "terms" array from strings to integers.
-					if ( ! empty( $value['terms'] ) ) {
-						if ( ! empty( $value['field'] ) && ( 'term_id' === $value['field'] || 'term_taxonomy_id' === $value['field'] ) ) {
-							$formatted_terms = [];
-							foreach ( $value['terms'] as $term ) {
-								$formatted_terms[] = intval( $term );
-							}
-							$value['terms'] = $formatted_terms;
-						}
+				foreach ( $input_tax_query['taxQuery'] as $value ) {
+					$value = $this->prepare_tax_query( $value );
+					if ( ! empty( $value ) ) {
+						$tax_query[] = $value;
 					}
-
-					// Make "include_children => false" for performance reasons unless
-					// it is specifically requested (but one really shouldn't). See
-					// https://vip.wordpress.com/documentation/term-queries-should-consider-include_children-false/
-					$value['include_children'] = false;
-					if ( isset( $value['includeChildren'] ) ) {
-						$value['include_children'] = $value['includeChildren'];
-						unset( $value['includeChildren'] );
-					}
-
-					$tax_query[ $tax_array_key ] = $value;
 				}
 			}
-			unset( $tax_query['taxArray'] );
-		} // End if().
 
-		if ( ! empty( $tax_query ) ) {
-			$query_args['tax_query'] = $tax_query;
-		}
+			if ( ! empty( $tax_query ) ) {
+				if ( 1 < count( $tax_query ) ) {
+					$tax_query['relation'] = $input_args['taxQuery']['relation'] ?? 'AND';
+				}
+				$query_args['tax_query'] = $tax_query;
+			}
+		} // End if().
 
 		unset( $query_args['taxQuery'] );
 
@@ -308,6 +308,52 @@ class TaxQuery {
 		 */
 		return $query_args;
 
+	}
+
+	private function prepare_tax_query($tax_query)
+	{
+		if (
+			! empty( $tax_query['taxArray'] )
+			&& is_array( $tax_query['taxArray'] )
+		) {
+			// If less than 2 taxArray objects were passed through, we don't need the "relation" field
+			// to be passed to WP_Query, so we'll unset it now
+			if ( 2 > count( $tax_query['taxArray'] ) ) {
+				unset( $tax_query['relation'] );
+			}
+
+			// Loop through the taxArray
+			foreach ( $tax_query['taxArray'] as &$value ) {
+
+				// If the "field" option was selected to be "term_id" or "term_taxonomy_id" we need to convert
+				// the values of the "terms" array from strings to integers.
+				if ( ! empty( $value['terms'] ) ) {
+					if ( ! empty( $value['field'] ) && ( 'term_id' === $value['field'] || 'term_taxonomy_id' === $value['field'] ) ) {
+						$formatted_terms = [];
+						foreach ( $value['terms'] as $term ) {
+							$formatted_terms[] = intval( $term );
+						}
+						$value['terms'] = $formatted_terms;
+					}
+				}
+
+				// Make "include_children => false" for performance reasons unless
+				// it is specifically requested (but one really shouldn't). See
+				// https://vip.wordpress.com/documentation/term-queries-should-consider-include_children-false/
+				$value['include_children'] = false;
+				if ( isset( $value['includeChildren'] ) ) {
+					$value['include_children'] = $value['includeChildren'];
+					unset( $value['includeChildren'] );
+				}
+			}
+
+			$tax_query = array_merge( $tax_query, $tax_query['taxArray'] );
+			unset( $tax_query['taxArray'] );
+
+			return $tax_query;
+		}
+
+		return null;
 	}
 
 }
